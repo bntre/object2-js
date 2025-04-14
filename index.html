@@ -1,0 +1,316 @@
+<html>
+<style>
+html, body { width: 100%; height: 100%; margin: 0; border: 0; overflow: hidden; }
+</style>
+<script src="VectorMatrix.js"></script>
+<script type="text/javascript">
+
+// 2021-04-03
+//   object2.swf ( http://bntr.planet.ee/wiki/?id=object2 )
+//     rewritten in js
+
+var canvas, ctx;
+var w = 0, h = 0, minsize = 0;
+var mousex = 0.2, mousey = 0.2; // mouse coordinates (-1..1) for rotation
+
+function update_mouse_pos(x, y) {
+    mousex = (x - w/2) / minsize;
+    mousey = (y - h/2) / minsize;
+}
+
+function init_canvas() {
+    canvas = document.getElementById('canvas');
+    
+    window.onresize = resize_canvas;
+    resize_canvas();
+
+    canvas.addEventListener("mousemove", function (e) {
+        update_mouse_pos(e.offsetX, e.offsetY);
+    }, false);
+    canvas.addEventListener("touchmove", function (e) {
+        const t = e.targetTouches[0];
+        update_mouse_pos(t.clientX, t.clientY);
+    }, false);
+}
+
+function resize_canvas() {
+    // resize canvas
+    canvas.width  = window.innerWidth;
+    canvas.height = window.innerHeight;
+
+    // update sizes
+    w = canvas.width;
+    h = canvas.height;
+    minsize = Math.min(w, h);
+    
+    // reinit context
+    ctx = canvas.getContext("2d");
+    //ctx.fillStyle   = '#fff'; -- fill color set per face
+    ctx.strokeStyle = '#f0f';
+    ctx.lineWidth   = 4;
+    ctx.lineJoin    = "bevel";
+};
+
+//========================================================================
+// Adapt object2.fla.txt
+
+var verts, faces;
+var matWorld = new Matrix(); // collecting rotations
+var matProj  = new Matrix(); // with current perspective coefficient
+var skipSpecialFaces = false; // just switch for modes
+var normals, colors; // normal vectors (to transform into world per frame) and corresponding colors (set per frame)
+var lightDir = new Vector(2, 1, 0); 
+lightDir.mult(1.0 / lightDir.len()); // normalize
+
+function trace(message) {
+    //console.log(message);
+}
+
+class Vertex {
+  constructor() {
+    this.v0 = new Vector(); // original
+    this.vT = new Vector(); // transformed
+  }
+  info() {
+    return( "W:" + this.v0.info() + ";" + this.vT.info() );
+  }
+}
+
+class Face {
+  constructor() {
+    this.v  = new Array();
+    this.z  = 0;    // z-order post-calculating
+    this.vU = null; // Vertex. This way we mark a special face (that we hide sometimes)
+    this.n  = -1;   // index of Normal
+  }
+  info() {
+    var r = "F:";
+    for( var i=0; i<4; i++ )
+      r += "\n" + this.v[i].info();
+    return r;
+  }
+  cull() {
+    var x1 = this.v[1].vT.x - this.v[0].vT.x;
+    var y1 = this.v[1].vT.y - this.v[0].vT.y;
+    var x2 = this.v[2].vT.x - this.v[0].vT.x;
+    var y2 = this.v[2].vT.y - this.v[0].vT.y;
+    var d  = x1*y2 - x2*y1;
+    return( d>0 );
+  }
+}
+
+function object2_load() {
+    var i,j,k;
+    // Vertices
+    verts = new Array( 64 );
+    for( i=0; i<4; i++)
+     for( j=0; j<4; j++)
+      for( k=0; k<4; k++) {
+      const vi = (i<<4)+(j<<2)+k;
+      verts[vi]    = new Vertex();
+      verts[vi].v0 = new Vector( k*2-3, j*2-3, i*2-3 ); // -3 -1 1 3
+      trace( verts[vi].info() );
+    }
+    // Faces
+    const facesv = new Array(
+      0,4,5,1, 1,5,6,2, 2,6,7,3, 4,8,9,5, 8,12,13,9,
+      37,41,42,38, 38,42,43,39, 41,45,46,42, 42,46,47,43,
+      12,28,29,13, 28,44,45,29, 44,60,61,45, 45,61,62,46, 46,62,63,47,
+      5,21,22,6, 6,22,23,7, 21,37,38,22, 22,38,39,23,
+      3,7,23,19, 19,23,39,35, 35,39,55,51, 39,43,59,55, 43,47,63,59,
+      5,9,25,21, 21,25,41,37, 9,13,29,25, 25,29,45,41,
+      51,55,54,50, 55,59,58,54, 59,63,62,58, 58,62,61,57, 57,61,60,56,
+      18,22,21,17, 17,21,20,16, 22,26,25,21, 21,25,24,20,
+      16,0,1,17, 17,1,2,18, 18,2,3,19, 34,18,19,35, 50,34,35,51,
+      40,24,25,41, 41,25,26,42, 56,40,41,57, 57,41,42,58,
+      56,60,44,40, 40,44,28,24, 24,28,12,8, 20,24,8,4, 16,20,4,0,
+      50,54,38,34, 34,38,22,18, 54,58,42,38, 38,42,26,22
+    );
+    faces = new Array( 54 );
+    for( i=0; i<faces.length; i++ ) {
+      faces[i]   = new Face();
+      faces[i].v = new Array( 4 );
+      for( j=0; j<4; j++ )
+        faces[i].v[j] = verts[ facesv[i*4+j] ];
+        //trace( faces[i].info() );
+    }
+    // For special faces: set vertices to detect hiding
+    faces[ 5].vU = verts[15];
+    faces[16].vU = verts[15];
+    faces[24].vU = verts[15];
+    faces[34].vU = verts[48];
+    faces[42].vU = verts[48];
+    faces[53].vU = verts[48];
+    
+    // Prepare and set face normals
+    normals = new Array(6);
+    colors  = new Array(6);
+    const ns = new Array(1,0,0, 0,1,0, 0,0,1, -1,0,0, 0,-1,0, 0,0,-1);
+    for( i=0; i<6; ++i ) {
+        normals[i] = new Vector(ns[i*3], ns[i*3+1], ns[i*3+2]);
+    }
+    for( i=0; i<faces.length; ++i ) {
+      const v1 = faces[i].v[1].v0.copy();
+      const v3 = faces[i].v[3].v0.copy();
+      v1.minus(faces[i].v[0].v0);
+      v3.minus(faces[i].v[0].v0);
+      const n = v3.cross(v1); // normal
+      n.mult(1.0 / n.len());
+      for( j=0; j<normals.length; ++j ) {
+        if (normals[j].dot(n) > 0.99) {
+           faces[i].n = j;
+           break; // normal index found
+        }
+      }
+    }
+}
+
+//------------------------------------------------------------------
+// Drawing a frame
+
+function drawTo( v, l ) { // v:Vertex, l:Number
+    if( l ) ctx.lineTo( v.vT.x, v.vT.y );
+    else    ctx.moveTo( v.vT.x, v.vT.y );
+}
+function drawFace( f ) { // f:Face
+    // fill
+    ctx.beginPath();
+    ctx.fillStyle = colors[f.n]; // set "rgb(...)" color
+    drawTo( f.v[3], 0 );
+    drawTo( f.v[0], 1 );
+    drawTo( f.v[1], 1 );
+    drawTo( f.v[2], 1 );
+    //drawTo( f.v[3], 1 );
+    ctx.closePath();
+    ctx.fill();
+    // stroke
+    ctx.beginPath();
+    drawTo( f.v[3], 0 );
+    drawTo( f.v[0], 1 );
+    drawTo( f.v[1], 1 );
+    drawTo( f.v[2], 1 );
+    drawTo( f.v[3], 1 );
+    drawTo( f.v[1], 1 );
+    drawTo( f.v[0], 0 );
+    drawTo( f.v[2], 1 );
+    ctx.stroke();
+}
+
+function isFaceVisible( f ) {
+    if( f.cull() ) return false;
+    if( f.vU ) { // special face
+        if (skipSpecialFaces) return false; // always skip
+        //if (f.vU.vT.z > 0 ) return;
+        if (f.vU.vT.z > -1.0) return false; // -1.0 set experimentally at 2021-04-02
+    }
+    return true;
+}
+function faceDetZ( f ) { // f:Face
+    f.z = f.v[0].vT.z + f.v[2].vT.z;
+}
+function faceOrder( a, b ) { // a:Face, b:Face
+    if( a.z  > b.z )  return -1;
+    if( a.z == b.z )  return  0;
+    return 1;
+}
+
+function object2_changeMatricesByMouse() {
+    // World
+    const matStepX = new Matrix();
+    const matStepY = new Matrix();
+    matStepX.rotation( 0,2, -0.05 * mousex * Math.PI );
+    matStepY.rotation( 1,2, -0.05 * mousey * Math.PI );
+    matWorld.multR( matStepX );
+    matWorld.multR( matStepY );
+    // Proj
+    matProj.m[2][3] = 0.25 * mousey;
+}
+
+function object2_frame() {
+    var i,j,k;
+    
+    // transform all vertices
+    const matWorldProj = matWorld.copy();
+    matWorldProj.multR( matProj );
+    for( i=0; i<verts.length; i++ ) {
+        verts[i].vT = verts[i].v0.copy();
+        verts[i].vT.multM( matWorldProj );
+        verts[i].vT.x *= minsize * 0.08;
+        verts[i].vT.y *= minsize * 0.08;
+        verts[i].vT.x += w/2;
+        verts[i].vT.y += h/2;
+    }
+    
+    // get fill colors for current world
+    for( i=0; i<normals.length; i++ ) {
+        const n = normals[i].copy();
+        n.multM( matWorld );
+        var c = n.dot(lightDir); // -1..1
+        c = Math.floor(255.0 * (c+9)/10); // x..255
+        colors[i] = 'rgb('+c+','+c+','+c+')';
+        //console.log("color",i,colors[i]);
+    }
+    
+    // get visible faces
+    const fs = faces.filter(isFaceVisible);
+    //console.log("visible faces", fs.length);
+    
+    for( const f of fs ) faceDetZ( f ); // z-order faces
+    fs.sort( faceOrder );
+    
+    // draw faces
+    ctx.clearRect( 0, 0, w, h );
+    for( const f of fs ) drawFace( f );
+}
+
+var frameCount = 40;
+var frameIndex = 0;
+function object2_downloadFrame() {
+    var el = document.getElementById('download');
+    const a = 2*Math.PI * frameIndex/frameCount;
+    const matX = new Matrix();
+    const matY = new Matrix();
+    matX.rotation( 0,2, a );
+    matY.rotation( 1,2, -0.06 * Math.PI );
+    matWorld = new Matrix(); // reset each frame
+    matWorld.multR( matX );
+    matWorld.multR( matY );
+    matProj.m[2][3] = 0.08 * Math.cos(a);
+    object2_frame();
+    el.setAttribute('download', 'object2_frame'+frameIndex+'.png');
+    el.setAttribute('href', canvas.toDataURL("image/png").replace("image/png", "image/octet-stream"));
+    el.click();
+    //
+    frameIndex += 1;
+    if (frameIndex < frameCount) {
+        window.setTimeout(object2_downloadFrame, 500);
+    }
+}
+
+function main() {
+    init_canvas();
+    
+    object2_load();
+    
+    //! to render and download frames
+    //object2_downloadFrame(); return;
+    
+    // run interactive animation
+    
+    // additional handlers
+    window.onclick = function() {
+        skipSpecialFaces = !skipSpecialFaces;
+    };
+    
+    window.setInterval(function() {
+        object2_changeMatricesByMouse();
+        object2_frame();
+    }, 33);
+}
+
+</script>
+<body onload="main()">
+    <canvas id="canvas"></canvas>
+    <a id="download"></a>
+</body>
+</html>
